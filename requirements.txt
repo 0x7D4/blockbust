@@ -1,0 +1,6 @@
+requests
+dnspython
+pyyaml
+tqdm
+pyasn
+beautifulsoup4
