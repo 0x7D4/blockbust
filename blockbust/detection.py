@@ -33,17 +33,17 @@ class RuleProcessor:
     ):
         self.pattern_name = pattern_name
         self.verify_resolver = verify_resolver
-        self._check_ZDNS_installed()
+        self._check_zdns_installed()
         self.rules = self._load_rules(rules_file)
         self.network_info = self.rules["network_info"]
         self.signature = self._get_signature()
         self.logger = logging.getLogger(__name__)
 
-    def _check_ZDNS_installed(self):
-        """Check if ZDNS binary is available"""
-        if not shutil.which("ZDNS"):
+    def _check_zdns_installed(self):
+        """Check if zdns binary is available"""
+        if not shutil.which("zdns"):
             raise FileNotFoundError(
-                "ZDNS binary not found. Please install ZDNS first:\n"
+                "zdns binary not found. Please install zdns first:\n"
                 "Installation instructions: https://github.com/zmap/zdns?tab=readme-ov-file#install"
             )
 
@@ -79,14 +79,14 @@ class RuleProcessor:
         else:
             raise ValueError(f"Pattern '{self.pattern_name}' not found in rules")
 
-    def run_ZDNS_query(self, domains_file: Path, output_file: Path, threads: int):
+    def run_zdns_query(self, domains_file: Path, output_file: Path, threads: int):
         domain_count = sum(1 for _ in open(domains_file))
         resolver_list = ",".join(
             self._extract_resolver_ips(self.signature["resolvers"])
         )
 
         cmd = [
-            "ZDNS",
+            "zdns",
             "A",
             "--name-servers",
             resolver_list,
@@ -127,7 +127,7 @@ class RuleProcessor:
 
         if process.returncode != 0:
             stderr = process.stderr.read()
-            raise Exception(f"ZDNS query failed: {stderr}")
+            raise Exception(f"zdns query failed: {stderr}")
 
         self.logger.info(f"Query complete. Results saved to {output_file}")
 
@@ -143,7 +143,7 @@ class RuleProcessor:
                 f.write(f"{domain}\n")
 
         cmd = [
-            "ZDNS",
+            "zdns",
             "A",
             "--name-servers",
             resolver,

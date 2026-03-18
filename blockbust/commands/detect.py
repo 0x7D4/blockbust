@@ -35,7 +35,7 @@ def detect_censorship(input_file, rule_file, pattern='primary', cached=False,
 
         if not cached:
             detector.logger.info(f"Starting fresh query run with {threads} threads")
-            detector.run_ZDNS_query(input_path, results_path, threads)
+            detector.run_zdns_query(input_path, results_path, threads)
         else:
             detector.logger.info("Using cached results")
             cached_results = sorted(output_path.glob(f'{rule_name}_ZDNS_results_*.jsonl'))

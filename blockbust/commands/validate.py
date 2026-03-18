@@ -11,7 +11,8 @@ import dns.query
 import dns.rdatatype
 import dns.rdataclass
 import dns.reversename
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
+import ipaddress
 import time
 from pathlib import Path
 import logging
@@ -366,6 +367,50 @@ def asn2name(asn: Optional[int], asnames: Dict) -> Optional[str]:
     return asnames.get(str(asn))
 
 
+def is_private_ip(ip: str) -> bool:
+    """Check if an IP address is private/reserved (RFC 1918, link-local, etc.)"""
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+
+def ipinfo_lookup(ip: str) -> Tuple[Optional[int], Optional[str]]:
+    """Fallback: query ipinfo.io for ASN/org info (works for private gateways via their public IP).
+    
+    For private IPs (e.g. 192.168.29.1), ipinfo.io uses the caller's public IP,
+    returning the ISP info for the network the gateway is on.
+    For public IPs that pyasn couldn't resolve, queries that specific IP.
+    
+    Returns (asn_number, as_name) or (None, None) on failure.
+    """
+    try:
+        # For private IPs, query without IP to get the caller's public IP info
+        # For public IPs, query that specific IP
+        if is_private_ip(ip):
+            url = "https://ipinfo.io/json"
+        else:
+            url = f"https://ipinfo.io/{ip}/json"
+        
+        resp = requests.get(url, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        org = data.get("org", "")
+        if org and org.startswith("AS"):
+            # org format: "AS15169 Google LLC"
+            parts = org.split(" ", 1)
+            asn_str = parts[0][2:]  # strip "AS" prefix
+            asn = int(asn_str)
+            as_name = parts[1] if len(parts) > 1 else ""
+            return asn, as_name
+        
+        return None, None
+    except Exception as e:
+        logging.debug(f"ipinfo lookup failed for {ip}: {e}")
+        return None, None
+
+
 def validate_resolvers(
     servers_file,
     domain,
@@ -499,6 +544,11 @@ def validate_resolvers(
                 ip = resolver["ip"]
                 asn = ip2asn(ip, asndb)
                 asname = asn2name(asn, asnames)
+
+                # Fallback to ipinfo.io if pyasn couldn't resolve (private/gateway IPs)
+                if asn is None:
+                    logging.info(f"pyasn miss for {ip}, falling back to ipinfo.io...")
+                    asn, asname = ipinfo_lookup(ip)
 
                 resolver["ASN"] = asn or ""
                 resolver["AS_Name"] = asname or ""
