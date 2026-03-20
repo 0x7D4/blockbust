@@ -79,42 +79,66 @@ class RuleProcessor:
         else:
             raise ValueError(f"Pattern '{self.pattern_name}' not found in rules")
 
-    def run_zdns_query(self, domains_file: Path, output_file: Path, threads: int):
-        domain_count = sum(1 for _ in open(domains_file))
+    def run_zdns_query(self, domains_file: Path, output_file: Path, threads: int,
+                        batch_size: int = 1000, batch_cooldown: int = 30):
+        import tempfile, time
+
+        all_domains = [line.strip() for line in open(domains_file) if line.strip()]
+        domain_count = len(all_domains)
         resolver_list = ",".join(
             self._extract_resolver_ips(self.signature["resolvers"])
         )
-
-        cmd = [
-            "zdns",
-            "A",
-            "--name-servers",
-            resolver_list,
-            "--input-file",
-            str(domains_file),
-            "--threads",
-            str(threads),
-            "--retries",
-            "3",
-        ]
 
         self.logger.info(
             f"Testing pattern '{self.pattern_name}' ({self.signature['pattern']})"
         )
         self.logger.info(f"Using resolvers: {resolver_list}")
 
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True,
-        )
+        if domain_count > batch_size:
+            num_batches = (domain_count + batch_size - 1) // batch_size
+            self.logger.info(
+                f"Processing {domain_count} domains in {num_batches} batches "
+                f"of {batch_size} ({batch_cooldown}s cooldown between batches)"
+            )
 
-        with open(output_file, "w") as outfile:
-            processed = 0
-            with tqdm(total=domain_count, desc="Querying domains") as pbar:
+        processed = 0
+        with open(output_file, "w") as outfile, \
+             tqdm(total=domain_count, desc="Querying domains") as pbar:
+
+            for batch_start in range(0, domain_count, batch_size):
+                batch_domains = all_domains[batch_start:batch_start + batch_size]
+                batch_num = batch_start // batch_size + 1
+
+                if batch_start > 0:
+                    self.logger.info(
+                        f"Batch {batch_num}: cooling down {batch_cooldown}s..."
+                    )
+                    time.sleep(batch_cooldown)
+
+                tmp = tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.txt', delete=False
+                )
+                tmp.write("\n".join(batch_domains) + "\n")
+                tmp.close()
+
+                cmd = [
+                    "zdns", "A",
+                    "--name-servers", resolver_list,
+                    "--input-file", tmp.name,
+                    "--threads", str(threads),
+                    "--retries", "3",
+                    "--timeout", "5",
+                ]
+
+                process = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    universal_newlines=True,
+                )
+
                 while True:
                     line = process.stdout.readline()
                     if not line and process.poll() is not None:
@@ -125,11 +149,13 @@ class RuleProcessor:
                         processed += 1
                         pbar.update(1)
 
-        if process.returncode != 0:
-            stderr = process.stderr.read()
-            raise Exception(f"zdns query failed: {stderr}")
+                Path(tmp.name).unlink(missing_ok=True)
 
-        self.logger.info(f"Query complete. Results saved to {output_file}")
+                if process.returncode != 0:
+                    stderr = process.stderr.read()
+                    self.logger.warning(f"Batch {batch_num} had errors: {stderr}")
+
+        self.logger.info(f"Query complete. {processed}/{domain_count} results saved to {output_file}")
 
     def verify_matches(
         self, domains: Set[str], resolver: str, check_nxdomain: bool = False
